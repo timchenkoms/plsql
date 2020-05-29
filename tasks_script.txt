@@ -1,0 +1,252 @@
+create or replace procedure new_product(pname in varchar2, pdescription in varchar2, pprice in number, pamount in number, pcategory in varchar2, pseller_email in varchar2, pcondition in varchar2) is
+  lv_product_id number;
+begin
+  begin
+    insert into products(product_name, product_description, product_category)
+    select pname, pdescription, category_id
+    from product_categories
+    where category_name = pcategory;
+  exception
+    when dup_val_on_index then
+      null; -- that already exists
+  end;
+  
+  begin
+    select product_id
+    into lv_product_id
+    from products, product_categories
+    where product_category = category_id
+      and category_name = pcategory
+      and product_name = pname;
+  exception
+    when no_data_found then
+      lv_product_id := null; -- something wrong with name of category
+  end;
+  
+  if lv_product_id is not null then
+    begin
+      insert into products_for_sell(pfs_product, pfs_seller, pfs_condition, pfs_price, pfs_amount)
+      select lv_product_id, seller_id, condition_id, pprice, pamount
+      from sellers, product_conditions
+      where seller_email = pseller_email
+        and condition_name = pcondition;
+    exception
+      when dup_val_on_index then
+        null; -- product exists, you should updated product
+    end;
+  end if;
+end;
+
+--------------------------------------------------
+
+begin
+  new_product('self‐driving video camera','automatically follows a subject that is being recorded',25,1,'Electronics','kasarseller@gmail.com','new');
+  new_product('holographic keyboard','that emits a three‐dimensional projection of a keyboard and recognizes virtual key presses from the typist',16,1,'Electronics','kasarseller@gmail.com','new');
+end;
+
+--------------------------------------------------
+
+select distinct product_name, product_description, category_name
+from products, products_for_sell, product_conditions, product_categories
+where pfs_condition = condition_id
+  and product_category = category_id
+  and pfs_product = product_id
+  and condition_name = 'new'
+  and category_name in ('Computers','Electronics')
+  and pfs_price <= 30
+
+--------------------------------------------------
+
+create or replace procedure update_product_for_sell(pname in varchar2, pprice in number, pamount in number, pcategory in varchar2, pseller_email in varchar2, pcondition in varchar2) is
+begin
+  begin
+    update products_for_sell
+    set pfs_price = pprice,
+        pfs_amount = pamount
+    where pfs_seller = (select seller_id from sellers where seller_email = pseller_email)
+      and pfs_product = (select product_id 
+                         from products, product_categories 
+                         where product_category = category_id and product_name = pname and category_name = pcategory)
+      and pfs_condition = (select condition_id from product_conditions where condition_name = pcondition);
+  end;
+end;
+
+--------------------------------------------------
+
+begin
+  update_product_for_sell('self‐driving video camera',25,4,'Electronics','kasarseller@gmail.com','new');
+  update_product_for_sell('holographic keyboard',16,4,'Electronics','kasarseller@gmail.com','new');
+end;
+
+--------------------------------------------------
+
+select product_name, product_description, category_name, pfs_price, pfs_amount
+from products_for_sell, products, product_categories, product_conditions, sellers
+where pfs_product = product_id
+  and product_category = category_id
+  and pfs_condition = condition_id
+  and pfs_seller = seller_id
+  and seller_email = 'kasarseller@gmail.com'
+  and pfs_amount <= 11
+
+--------------------------------------------------
+
+create or replace procedure new_customer(pusername in varchar2, pfirst_name in varchar2, plast_name in varchar2, pemail in varchar2,
+                                         pphone in number, ppassword in varchar2, paddress_line1 in varchar2, paddress_line2 in varchar2, pzip_code in varchar2) is
+  lv_customer_id number;
+begin
+  begin
+    insert into customers(customer_username, customer_first_name, customer_last_name, customer_email, customer_phone, customer_password)
+    values(pusername, pfirst_name, plast_name, pemail, pphone, ppassword)
+    returning customer_id into lv_customer_id;
+  exception
+    when dup_val_on_index then
+      lv_customer_id := null; -- customer already exists
+  end;
+  
+  if lv_customer_id is not null then
+    insert into customer_addresses(address_customer, address_line1, address_line2, address_zipcode)
+    values(lv_customer_id, paddress_line1, paddress_line2, pzip_code);
+  end if;
+end;
+
+--------------------------------------------------
+
+select customer_first_name, customer_last_name, customer_email, customer_phone
+from customers
+where customer_last_name in
+  (select customer_last_name
+   from customers
+   group by customer_last_name
+   having count(1)>=4)
+
+--------------------------------------------------
+
+create or replace procedure new_purchase(pname in varchar2, pcategory in varchar2, pcondition in varchar2, pamount in number, pspeed in varchar2, pcustomer_email in varchar2, pseller_email in varchar2, paddress_line1 in varchar2, paddress_line2 in varchar2, pzip_code in varchar2) is
+  lv_order_id number;
+  lv_pfs_id number;
+begin
+  begin
+    select order_id
+    into lv_order_id
+    from orders, customers, sellers, order_statuses
+    where order_customer = customer_id
+      and order_seller = seller_id
+      and order_status = status_id
+      and customer_email = pcustomer_email
+      and seller_email = pseller_email
+      and status_name = 'new';
+    exception
+      when no_data_found then
+        begin
+          insert into orders("ORDER_CUSTOMER", "ORDER_SELLER", "ORDER_SPEED", "ORDER_ADDRESS_LINE1", "ORDER_ADDRESS_LINE2", "ORDER_ZIPCODE", "ORDER_STATUS")
+          values(
+            (select customer_id from customers where customer_email = pcustomer_email),
+            (select seller_id from sellers where seller_email = pseller_email),
+            (select speed_id from shipping_speeds where speed_name = pspeed),
+            paddress_line1,
+            paddress_line2,
+            pzip_code,
+            (select status_id from order_statuses where status_name = 'new')
+          )
+          returning order_id into lv_order_id;
+        exception
+          when others then
+            lv_order_id := null; -- something was wrong (non existing data)
+        end;
+    end;
+    
+    if lv_order_id is not null then null;  
+    begin
+      select pfs_id
+      into lv_pfs_id
+      from products_for_sell, products, product_categories, sellers, product_conditions
+      where pfs_product = product_id
+        and pfs_seller = seller_id
+        and pfs_condition = condition_id
+        and product_category = category_id
+        and product_name = pname
+        and category_name = pcategory
+        and seller_email = pseller_email
+        and condition_name = pcondition;
+      
+      insert into order_purchases (	"PURCHASE_ORDER", "PURCHASE_PFS", "PURCHASE_PRICE", "PURCHASE_AMOUNT")
+      select lv_order_id, pfs_id, pfs_price, pamount
+      from products_for_sell
+      where pfs_id = lv_pfs_id;
+      
+      -- ideally we change the product amount after payment
+      update products_for_sell
+      set pfs_amount = pfs_amount - pamount
+      where pfs_id = lv_pfs_id;
+    exception
+      when dup_val_on_index then
+        null; -- that already exists, need to update amount
+    end;
+    end if;
+end;
+
+
+--------------------------------------------------
+
+begin
+  new_purchase('self‐driving video camera', 'Electronics', 'new', 1, 'standard shipping', 'kasarcustomer@gmail.com', 'kasarseller@gmail.com', '70 Florence Street', 'Worcester, MA', '01610');
+  -- add the second purchase to test
+  new_purchase('holographic keyboard', 'Electronics', 'new', 1, 'standard shipping', 'kasarcustomer@gmail.com', 'kasarseller@gmail.com', '70 Florence Street', 'Worcester, MA', '01610');
+  new_purchase('holographic keyboard', 'Electronics', 'new', 3, 'standard shipping', 'facilitator@gmail.com', 'kasarseller@gmail.com', '950 Main Street', 'Worcester, MA', '01610');
+end;
+
+--------------------------------------------------
+
+select customer_first_name, customer_last_name, customer_email,
+listagg(address, '; ') within group (order by address) customer_addresses
+from (
+  select customer_first_name, customer_last_name, customer_email, order_address_line1||' '||order_address_line2||' '||order_zipcode address
+  from customers, orders, order_purchases
+  where customer_id = order_customer
+    and order_id = purchase_order
+    and purchase_pfs in (select pfs_product
+                         from order_purchases, orders, order_statuses, products_for_sell, product_conditions
+                         where order_status = status_id
+                           and status_name = 'shipped'
+                           and purchase_order = order_id
+                           and purchase_pfs = pfs_id
+                           and pfs_condition = condition_id
+                           and condition_name = 'new'
+                         group by pfs_product
+                         having count(distinct order_customer) >= 3)
+  group by customer_first_name, customer_last_name, customer_email, order_address_line1||' '||order_address_line2||' '||order_zipcode)
+group by customer_first_name, customer_last_name, customer_email
+
+--------------------------------------------------
+
+create or replace procedure order_shipping(porder_id in number, ptracking_id in varchar2) is
+begin
+  -- there is no any columns combination that can exactly identify order_id
+  -- the table possibly could have several orders for the particular customer that are paid and ready to be shipped
+  update orders
+  set order_tracking_id = ptracking_id,
+      order_status = (select status_id from order_statuses where status_name = 'shipped')
+  where order_id = porder_id;
+end;
+
+--------------------------------------------------
+
+begin
+  order_shipping(1, 'ZVA2943758393');
+  order_shipping(21,'ZVA2943758394');
+end;
+
+--------------------------------------------------
+
+select customer_first_name, customer_last_name, customer_email
+from orders, order_statuses, customers
+where order_status = status_id
+  and order_customer = customer_id
+  and status_name = 'shipped'
+group by order_customer, customer_last_name, customer_first_name, customer_email
+having count(1) = (select max(count(1))
+                   from orders, order_statuses
+                   where order_status = status_id
+                     and status_name = 'shipped'
+                   group by order_customer)
